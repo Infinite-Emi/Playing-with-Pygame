@@ -33,6 +33,8 @@ UI_BORDER_COLOR = (52, 73, 94)
 
 # Game constants
 GAME_TIMER_SECONDS = 30.0
+# MODIFICATION: Respawn time in milliseconds (10 seconds)
+ENEMY_RESPAWN_TIME = 10000 
 
 # Setup the game window
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -106,18 +108,32 @@ class Player(pygame.sprite.Sprite):
         self.xp = 0
         self.xp_to_next_level = 10
 
+    # MODIFICATION: Overhauled the move method to be more robust.
     def move(self, dx, dy, walls):
-        """ Handles player movement and collision with walls. """
-        self.rect.x += dx * self.speed
-        self.rect.y += dy * self.speed
+        """ Handles player movement and collision with walls robustly. """
+        # Create a movement vector
+        vec = pygame.math.Vector2(dx, dy)
+        # Normalize the vector to prevent faster diagonal speed
+        if vec.length_squared() > 0:
+            vec.normalize_ip()
 
-        # Check for collisions with walls
+        # Move horizontally and check for collisions
+        self.rect.x += vec.x * self.speed
         for wall in walls:
             if self.rect.colliderect(wall.rect):
-                if dx > 0: self.rect.right = wall.rect.left
-                if dx < 0: self.rect.left = wall.rect.right
-                if dy > 0: self.rect.bottom = wall.rect.top
-                if dy < 0: self.rect.top = wall.rect.bottom
+                if vec.x > 0: # Moving right
+                    self.rect.right = wall.rect.left
+                if vec.x < 0: # Moving left
+                    self.rect.left = wall.rect.right
+        
+        # Move vertically and check for collisions
+        self.rect.y += vec.y * self.speed
+        for wall in walls:
+            if self.rect.colliderect(wall.rect):
+                if vec.y > 0: # Moving down
+                    self.rect.bottom = wall.rect.top
+                if vec.y < 0: # Moving up
+                    self.rect.top = wall.rect.bottom
 
     def gain_xp(self, amount):
         """ Handles gaining experience and leveling up. """
@@ -170,10 +186,15 @@ class Enemy(pygame.sprite.Sprite):
         self.image = pygame.Surface([TILE_SIZE - 4, TILE_SIZE - 4])
         self.image.fill(color)
         self.rect = self.image.get_rect()
+        # MODIFICATION: Store original position for respawning
+        self.original_x = x
+        self.original_y = y
         self.rect.x = x * TILE_SIZE + 2
         self.rect.y = y * TILE_SIZE + 2
         self.name = name
+        self.color = color # MODIFICATION: Store color for respawning
         self.hp = hp
+        self.max_hp = hp # MODIFICATION: Store max_hp for respawning
         self.attack = attack
         self.xp_reward = xp_reward
 
@@ -269,6 +290,9 @@ def game_loop():
     walls = pygame.sprite.Group()
     enemies = pygame.sprite.Group()
     towns = pygame.sprite.Group()
+    
+    # MODIFICATION: List to track killed enemies for respawning
+    killed_enemies = []
 
     # Parse the GAME_MAP to create objects
     player = None
@@ -334,12 +358,10 @@ def game_loop():
 
         if game_state == "playing":
             # --- Player Movement ---
+            # MODIFICATION: More robust way to get movement direction
             keys = pygame.key.get_pressed()
-            dx, dy = 0, 0
-            if keys[pygame.K_LEFT] or keys[pygame.K_a]: dx = -1
-            if keys[pygame.K_RIGHT] or keys[pygame.K_d]: dx = 1
-            if keys[pygame.K_UP] or keys[pygame.K_w]: dy = -1
-            if keys[pygame.K_DOWN] or keys[pygame.K_s]: dy = 1
+            dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
+            dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
             player.move(dx, dy, walls)
             
             # --- Update ---
@@ -366,8 +388,14 @@ def game_loop():
                 if enemy.hp <= 0:
                     message = f"Defeated {enemy.name}!"
                     player.gain_xp(enemy.xp_reward)
+                    
+                    # MODIFICATION: Add non-boss enemies to the respawn list
+                    if enemy.name != "Evil Lord":
+                        killed_enemies.append((pygame.time.get_ticks(), enemy))
+
                     if enemy.name == "Evil Lord":
                         game_state = "win"
+                    
                     enemy.kill()
                 else:
                     message = f"Fought {enemy.name}, took {enemy_damage} damage."
@@ -376,6 +404,22 @@ def game_loop():
 
                 if player.hp <= 0:
                     game_state = "game_over"
+
+            # MODIFICATION: Respawn logic
+            current_time = pygame.time.get_ticks()
+            # Iterate over a copy of the list to allow modification during iteration
+            for kill_time, dead_enemy in killed_enemies[:]:
+                if current_time - kill_time > ENEMY_RESPAWN_TIME:
+                    # Create a new instance of the enemy with its original stats
+                    new_enemy = Enemy(dead_enemy.original_x, dead_enemy.original_y, 
+                                      dead_enemy.name, dead_enemy.color, 
+                                      dead_enemy.max_hp, dead_enemy.attack, 
+                                      dead_enemy.xp_reward)
+                    all_sprites.add(new_enemy)
+                    enemies.add(new_enemy)
+                    killed_enemies.remove((kill_time, dead_enemy)) # Remove from respawn list
+                    print(f"Respawned a {dead_enemy.name}!")
+
 
         # --- Drawing ---
         draw_world(screen, camera)
@@ -419,4 +463,3 @@ def game_loop():
 # ==============================================================================
 if __name__ == '__main__':
     game_loop()
-# This will start the game when the script is run directly
